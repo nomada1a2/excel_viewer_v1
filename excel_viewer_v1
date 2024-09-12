@@ -1,0 +1,187 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import pandas as pd
+from tkinter import ttk
+
+# 글로벌 변수로 엑셀 데이터프레임을 유지
+df = None
+sort_column = None  # 정렬할 열을 저장하는 변수
+sort_order = True  # True: 오름차순, False: 내림차순
+
+# 엑셀 파일 열고 서식을 제거한 후 데이터를 테이블로 표시하는 함수
+def load_excel_file():
+    global df
+    # 파일 경로 설정 (올바른 형식으로 입력)
+    file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
+    if not file_path:
+        return
+
+    try:
+        # 엑셀 파일을 pandas로 읽기 (header와 데이터 손상 시 건너뛰기 옵션 추가)
+        df = pd.read_excel(file_path, engine='openpyxl', na_values=["", "NA"], keep_default_na=False)
+
+        # 기존 테이블 내용 지우기
+        for i in tree.get_children():
+            tree.delete(i)
+
+        # 'start'와 'end' 열에서만 시간 데이터를 제거 (YYYY-MM-DD로 변환)
+        for col in ['Start', 'End']:
+            if col in df.columns:  # 해당 열이 존재하는 경우에만 처리
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d')
+
+        # NaN 값을 0으로 채우고, 숫자 데이터는 반올림하여 소수점 제거 (모든 열에 적용)
+        df = df.fillna(0).apply(lambda col: col.map(lambda x: round(x) if isinstance(x, (float, int)) else x))
+
+        # 테이블에 데이터 추가
+        tree["columns"] = list(df.columns)
+        tree["show"] = "headings"
+
+        # 헤더에 기본 오름차순 화살표 추가
+        for col in tree["columns"]:
+            tree.heading(col, text=f"{col} ▲", command=lambda _col=col: sort_by_column(_col))  # 열 클릭 시 정렬
+
+        # 각 열의 너비를 설정하고, stretch=False로 고정
+        for col in tree["columns"]:
+            tree.column(col, width=100, stretch=False)
+
+        display_table(df)  # 테이블에 데이터를 표시
+
+    except Exception as e:
+        messagebox.showerror("Error", f"파일을 불러오는 중 오류가 발생했습니다: {e}")
+
+# 테이블을 표시하는 함수
+def display_table(data):
+    # 기존 테이블 내용 지우기
+    for i in tree.get_children():
+        tree.delete(i)
+
+    # 데이터 추가
+    for index, row in data.iterrows():
+        # 출력 형식 수정: 소수점을 반올림한 후 출력
+        formatted_row = [round(x) if isinstance(x, (float, int)) else x for x in row]
+        tree.insert("", "end", values=formatted_row)
+
+# 열을 기준으로 정렬하는 함수
+def sort_by_column(col):
+    global df, sort_column, sort_order
+    if sort_column == col:
+        sort_order = not sort_order  # 같은 열을 다시 클릭하면 정렬 순서를 반대로 변경
+    else:
+        sort_column = col
+        sort_order = True  # 새 열을 클릭할 때는 오름차순 정렬로 시작
+
+    try:
+        # 숫자와 문자열을 구분하여 정렬
+        if pd.api.types.is_numeric_dtype(df[col]):
+            # 숫자 열인 경우 숫자형으로 정렬
+            df_sorted = df.sort_values(by=col, ascending=sort_order)
+        else:
+            # 문자열 열인 경우 문자열형으로 정렬
+            df_sorted = df.sort_values(by=col, key=lambda x: x.astype(str), ascending=sort_order)
+
+        # 정렬된 데이터를 테이블에 다시 표시
+        display_table(df_sorted)
+
+        # 정렬 상태에 따라 헤더에 화살표 추가
+        for c in tree["columns"]:
+            if c == col:
+                if sort_order:
+                    heading_text = f"{c} ▼"  # 내림차순 (클릭된 열)
+                else:
+                    heading_text = f"{c} ▲"  # 오름차순 (클릭된 열)
+            else:
+                heading_text = f"{c} ▲"  # 기본 상태는 오름차순 화살표
+            tree.heading(c, text=heading_text, command=lambda _col=c: sort_by_column(_col))  # 각 열의 헤더 업데이트
+
+    except Exception as e:
+        messagebox.showerror("Error", f"정렬 중 오류가 발생했습니다: {e}")
+
+# 셀 더블 클릭 시 내용을 클립보드로 복사하는 함수
+def copy_to_clipboard(event):
+    selected_item = tree.selection()
+    if selected_item:
+        item = tree.item(selected_item[0])
+        values = item['values']
+        col = tree.identify_column(event.x)
+        col_num = int(col.replace("#", "")) - 1  # 열 번호 추출
+        cell_value = values[col_num]  # 클릭한 셀의 값 추출
+
+        # 클립보드에 셀 내용 복사
+        root.clipboard_clear()
+        root.clipboard_append(str(cell_value))
+        messagebox.showinfo("클립보드", f"'{cell_value}'가 클립보드에 복사되었습니다.")
+
+# 검색 및 필터링 함수 (모든 열에서 검색)
+def search_data(event=None):
+    global df
+    if df is None:
+        messagebox.showerror("Error", "먼저 엑셀 파일을 업로드하세요.")
+        return
+
+    # 입력된 검색어를 가져옴
+    search_term = search_entry.get().lower()
+
+    # 기존 테이블 내용 지우기
+    for i in tree.get_children():
+        tree.delete(i)
+
+    # 필터링된 데이터프레임 만들기 (모든 열에서 검색어 포함 여부 확인)
+    if search_term:
+        filtered_df = df[df.apply(lambda row: row.astype(str).str.lower().str.contains(search_term).any(), axis=1)]
+    else:
+        filtered_df = df
+
+    # 필터링된 데이터로 테이블 다시 생성
+    display_table(filtered_df)
+
+# Tkinter 창 생성
+root = tk.Tk()
+root.title("엑셀 파일 테이블 변환기 V.1")
+root.geometry("900x700")
+
+# 파일 열기와 검색 창 부분 (상단에 위치)
+top_frame = tk.Frame(root)
+top_frame.pack(side="top", pady=10)
+
+# 엑셀 파일 열기 버튼 생성
+btn = tk.Button(top_frame, text="엑셀 파일 열기", command=load_excel_file)
+btn.pack(side="left", padx=10)
+
+# 검색 창 추가 (검색어 입력받는 필드)
+search_label = tk.Label(top_frame, text="검색어:")
+search_label.pack(side="left", padx=5)
+
+search_entry = tk.Entry(top_frame)
+search_entry.pack(side="left", padx=5)
+
+# 검색 버튼
+search_btn = tk.Button(top_frame, text="검색", command=search_data)
+search_btn.pack(side="left", padx=10)
+
+# 엔터 키로 검색 기능 실행하도록 설정
+search_entry.bind("<Return>", search_data)
+
+# 테이블과 스크롤바를 위한 프레임 (아래에 위치)
+bottom_frame = tk.Frame(root)
+bottom_frame.pack(pady=20, fill="both", expand=True)
+
+# 테이블(트리뷰) 생성
+tree = ttk.Treeview(bottom_frame)
+
+# 세로 스크롤바 생성
+vsb = ttk.Scrollbar(bottom_frame, orient="vertical", command=tree.yview)
+vsb.pack(side="right", fill="y")
+
+# 가로 스크롤바 생성
+hsb = ttk.Scrollbar(bottom_frame, orient="horizontal", command=tree.xview)
+hsb.pack(side="bottom", fill="x")
+
+# 스크롤바를 트리뷰에 연결
+tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+tree.pack(expand=True, fill="both")
+
+# 셀 더블 클릭 이벤트 바인딩 (더블 클릭 시 텍스트 클립보드에 복사)
+tree.bind("<Double-1>", copy_to_clipboard)
+
+# 애플리케이션 실행
+root.mainloop()
